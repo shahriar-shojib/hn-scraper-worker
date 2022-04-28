@@ -420,6 +420,7 @@ dependencies = [
  "console_error_panic_hook",
  "reqwest",
  "scraper",
+ "serde",
  "serde_json",
  "worker",
 ]

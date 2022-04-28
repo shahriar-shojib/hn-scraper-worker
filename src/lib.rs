@@ -1,58 +1,67 @@
 use scraper::{ElementRef, Html, Selector};
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use worker::*;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Post {
+    title: String,
+    url: String,
+    points: String,
+    age: String,
+}
 
 mod utils;
 
-async fn fetch_posts() -> Option<Vec<Value>> {
-    let res = reqwest::get("https://news.ycombinator.com/news").await;
+async fn fetch_posts() -> core::result::Result<Vec<Post>, Box<dyn std::error::Error>> {
+    let body = reqwest::get("https://news.ycombinator.com/news")
+        .await?
+        .text()
+        .await?;
 
-    if let Ok(res) = res {
-        if let Ok(body) = res.text().await {
-            let parsed_html = Html::parse_document(&body);
+    let parsed_html = Html::parse_document(&body);
 
-            let posts = parsed_html
-                .select(&Selector::parse("tr.athing").unwrap())
-                .map(|element| {
-                    let url_element = element
-                        .select(&Selector::parse(".title>a").unwrap())
-                        .next()
-                        .unwrap();
+    let selector = Selector::parse("tr.athing").unwrap();
 
-                    let title = url_element.text().collect::<Vec<_>>().join(" ");
-                    let url = url_element.value().attr("href").unwrap_or("");
+    let posts = parsed_html
+        .select(&selector)
+        .filter_map(|element| {
+            let selector = Selector::parse(".title>a").unwrap();
+            let url_element = element.select(&selector).next()?;
 
-                    console_log!("{}", title);
+            let title = url_element.text().collect::<Vec<_>>().join(" ");
+            let url = url_element.value().attr("href").unwrap_or("");
 
-                    let next_element = element.next_sibling().and_then(ElementRef::wrap).unwrap();
-
-                    let points = next_element
+            let post = element
+                .next_sibling()
+                .and_then(ElementRef::wrap)
+                .and_then(|element| {
+                    let points = element
                         .select(&Selector::parse(".score").unwrap())
-                        .next()
-                        .and_then(|e| Some(e.text().collect::<Vec<_>>().join(" ")));
+                        .next()?
+                        .text()
+                        .collect::<Vec<_>>()
+                        .join(" ");
 
-                    let age = next_element
+                    let age = element
                         .select(&Selector::parse(".age").unwrap())
-                        .next()
-                        .unwrap()
+                        .next()?
                         .value()
-                        .attr("title")
-                        .unwrap_or("");
+                        .attr("title")?;
 
-                    json!({
-                        "title": title,
-                        "url": url,
-                        "points": points,
-                        "age": age,
+                    Some(Post {
+                        title,
+                        url: url.to_string(),
+                        points,
+                        age: age.to_string(),
                     })
-                })
-                .collect::<Vec<_>>();
+                });
 
-            return Some(posts);
-        }
-    }
+            post
+        })
+        .collect();
 
-    None
+    Ok(posts)
 }
 
 #[event(fetch)]
@@ -64,9 +73,9 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
             let posts = fetch_posts().await;
 
             match posts {
-                Some(posts) => Response::from_json(&posts),
-                None => Response::from_json(&json!({
-                    "error": "failed to fetch posts"
+                Ok(posts) => Response::from_json(&posts),
+                Err(_) => Response::from_json(&json!({
+                    "error": "Something Went Wrong when fetching the posts"
                 })),
             }
         })
